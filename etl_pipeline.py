@@ -18,22 +18,25 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Configure logging (Windows-compatible, no emojis)
-log_dir = os.path.join(os.getcwd(), 'logs')
-os.makedirs(log_dir, exist_ok=True)
+# Configure logging (Lambda-compatible)
+# Use /tmp directory for logs in Lambda (only writable location)
+log_dir = '/tmp' if os.environ.get('AWS_EXECUTION_ENV') else os.path.join(os.getcwd(), 'logs')
+if not os.environ.get('AWS_EXECUTION_ENV'):
+    os.makedirs(log_dir, exist_ok=True)
 
 # Force UTF-8 encoding for Windows console
-if sys.platform == 'win32':
+if sys.platform == 'win32' and not os.environ.get('AWS_EXECUTION_ENV'):
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(os.path.join(log_dir, 'etl_pipeline.log'), encoding='utf-8')
+        logging.FileHandler(os.path.join(log_dir, 'etl_pipeline.log'), encoding='utf-8') if not os.environ.get('AWS_EXECUTION_ENV') else logging.NullHandler()
     ]
 )
 logger = logging.getLogger(__name__)
@@ -63,7 +66,7 @@ class CryptoETLPipeline:
         # Build connection string from individual components
         if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
             raise ValueError(
-                "Missing database credentials. Please check your .env file!\n"
+                "Missing database credentials. Please check your environment variables!\n"
                 "Required: DB_HOST, DB_USER, DB_PASSWORD, DB_NAME"
             )
         
@@ -93,27 +96,6 @@ class CryptoETLPipeline:
                 
         except Exception as e:
             logger.error(f"[ERROR] Failed to connect to database: {e}")
-            logger.error("Please verify your credentials in .env file")
-            logger.error("")
-            logger.error("===== HOW TO GET YOUR SUPABASE CREDENTIALS =====")
-            logger.error("1. Go to https://supabase.com/dashboard")
-            logger.error("2. Select your project")
-            logger.error("3. Click 'Project Settings' (gear icon on left)")
-            logger.error("4. Go to 'Database' tab")
-            logger.error("5. Scroll down to 'Connection string'")
-            logger.error("6. Enable 'Use connection pooling'")
-            logger.error("7. Select 'Transaction' mode")
-            logger.error("8. Copy the connection string")
-            logger.error("")
-            logger.error("The connection string looks like:")
-            logger.error("postgresql://postgres.[PROJECT-REF]:[PASSWORD]@[HOST]:6543/postgres")
-            logger.error("")
-            logger.error("Extract these values for your .env file:")
-            logger.error("DB_HOST = the part after @ and before :6543")
-            logger.error("DB_PORT = 6543")
-            logger.error("DB_USER = postgres.[PROJECT-REF]")
-            logger.error("DB_PASSWORD = your password")
-            logger.error("DB_NAME = postgres")
             raise
         
         self.sentiment_analyzer = SentimentIntensityAnalyzer()
