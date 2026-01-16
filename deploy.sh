@@ -9,7 +9,7 @@ set -e  # Exit on any error
 
 # Configuration - UPDATE THESE VALUES
 AWS_REGION="us-east-1"
-AWS_ACCOUNT_ID="096537988729"  # Get from AWS Console
+AWS_ACCOUNT_ID="587234333121"  # Get from AWS Console
 ECR_REPOSITORY_NAME="crypto-sentiment-etl"
 LAMBDA_FUNCTION_NAME="crypto-sentiment-pipeline"
 LAMBDA_ROLE_NAME="CryptoSentimentLambdaRole"

@@ -6,7 +6,7 @@ Fetches Bitcoin/Ethereum prices and news sentiment every 30 minutes
 import os
 import sys
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional
 import requests
 import pandas as pd
@@ -18,27 +18,36 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Configure logging
+# Configure logging (Windows-compatible, no emojis)
+log_dir = os.path.join(os.getcwd(), 'logs')
+os.makedirs(log_dir, exist_ok=True)
+
+# Force UTF-8 encoding for Windows console
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('/tmp/etl_pipeline.log')  # Lambda writable directory
+        logging.FileHandler(os.path.join(log_dir, 'etl_pipeline.log'), encoding='utf-8')
     ]
 )
 logger = logging.getLogger(__name__)
 
 # Configuration from environment
-DATABASE_URL = os.getenv("DATABASE_URL")
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 CRYPTO_SYMBOLS = os.getenv("CRYPTO_SYMBOLS", "bitcoin,ethereum").split(',')
-NEWS_QUERY = os.getenv("NEWS_QUERY", "cryptocurrency OR bitcoin OR ethereum")
+NEWS_QUERY = os.getenv("NEWS_SEARCH_QUERY", "cryptocurrency OR bitcoin OR ethereum")
 
 # API Endpoints
 COINGECKO_API = "https://api.coingecko.com/api/v3"
 NEWSAPI_ENDPOINT = "https://newsapi.org/v2/everything"
 
+# Database configuration
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME")
@@ -51,44 +60,64 @@ class CryptoETLPipeline:
     
     def __init__(self):
         """Initialize database connection and sentiment analyzer"""
-        # Build connection string from individual components or use full URL
-        if DATABASE_URL:
-            # Clean the DATABASE_URL by removing unsupported parameters
-            clean_db_url = DATABASE_URL.split('?')[0]
-            logger.info("Using DATABASE_URL from environment")
-        elif all([DB_HOST, DB_USER, DB_PASSWORD]):
-            # Build from individual components (avoids URL encoding issues)
-            from urllib.parse import quote_plus
-            clean_db_url = (
-                f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD)}"
-                f"@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-            )
-            logger.info(f"Building connection string from individual components")
-            logger.info(f"Connecting to: {DB_HOST}:{DB_PORT}/{DB_NAME} as user: {DB_USER}")
-        else:
+        # Build connection string from individual components
+        if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
             raise ValueError(
-                "Either DATABASE_URL or (DB_HOST, DB_USER, DB_PASSWORD) must be set. "
-                "Check your .env file!"
+                "Missing database credentials. Please check your .env file!\n"
+                "Required: DB_HOST, DB_USER, DB_PASSWORD, DB_NAME"
             )
         
+        # Build connection string (avoiding URL encoding issues)
+        from urllib.parse import quote_plus
+        db_url = (
+            f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD)}"
+            f"@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+        )
+        
+        logger.info(f"Connecting to database: {DB_HOST}:{DB_PORT}/{DB_NAME}")
+        logger.info(f"User: {DB_USER}")
+        
         try:
-            self.engine = create_engine(clean_db_url, pool_pre_ping=True)
+            self.engine = create_engine(
+                db_url,
+                pool_pre_ping=True,
+                pool_size=5,
+                max_overflow=10,
+                pool_recycle=3600
+            )
+            
             # Test the connection
             with self.engine.connect() as conn:
                 result = conn.execute(text("SELECT 1"))
-                logger.info("Database connection test successful!")
+                logger.info("[OK] Database connection successful!")
+                
         except Exception as e:
-            logger.error(f"Failed to connect to database: {e}")
-            logger.error("Please verify your credentials in .env file:")
-            logger.error(f"  DB_HOST: {DB_HOST}")
-            logger.error(f"  DB_PORT: {DB_PORT}")
-            logger.error(f"  DB_NAME: {DB_NAME}")
-            logger.error(f"  DB_USER: {DB_USER}")
-            logger.error(f"  DB_PASSWORD: {'*' * len(DB_PASSWORD) if DB_PASSWORD else 'NOT SET'}")
+            logger.error(f"[ERROR] Failed to connect to database: {e}")
+            logger.error("Please verify your credentials in .env file")
+            logger.error("")
+            logger.error("===== HOW TO GET YOUR SUPABASE CREDENTIALS =====")
+            logger.error("1. Go to https://supabase.com/dashboard")
+            logger.error("2. Select your project")
+            logger.error("3. Click 'Project Settings' (gear icon on left)")
+            logger.error("4. Go to 'Database' tab")
+            logger.error("5. Scroll down to 'Connection string'")
+            logger.error("6. Enable 'Use connection pooling'")
+            logger.error("7. Select 'Transaction' mode")
+            logger.error("8. Copy the connection string")
+            logger.error("")
+            logger.error("The connection string looks like:")
+            logger.error("postgresql://postgres.[PROJECT-REF]:[PASSWORD]@[HOST]:6543/postgres")
+            logger.error("")
+            logger.error("Extract these values for your .env file:")
+            logger.error("DB_HOST = the part after @ and before :6543")
+            logger.error("DB_PORT = 6543")
+            logger.error("DB_USER = postgres.[PROJECT-REF]")
+            logger.error("DB_PASSWORD = your password")
+            logger.error("DB_NAME = postgres")
             raise
         
         self.sentiment_analyzer = SentimentIntensityAnalyzer()
-        logger.info("ETL Pipeline initialized successfully")
+        logger.info("[OK] ETL Pipeline initialized successfully")
     
     def fetch_crypto_prices(self) -> Optional[pd.DataFrame]:
         """
@@ -96,12 +125,12 @@ class CryptoETLPipeline:
         
         Returns:
             DataFrame with columns: symbol, price, volume_24h, market_cap, 
-            price_change_24h, price_change_percentage_24h, last_updated
+            price_change_24h, last_updated
         """
         try:
-            logger.info(f"Fetching crypto prices for: {CRYPTO_SYMBOLS}")
+            logger.info(f"Fetching crypto prices for: {', '.join(CRYPTO_SYMBOLS)}")
             
-            # CoinGecko API endpoint
+            # CoinGecko API endpoint (free tier, no API key needed)
             url = f"{COINGECKO_API}/simple/price"
             params = {
                 'ids': ','.join(CRYPTO_SYMBOLS),
@@ -112,37 +141,48 @@ class CryptoETLPipeline:
                 'include_last_updated_at': 'true'
             }
             
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params, timeout=15)
             response.raise_for_status()
             data = response.json()
             
             # Transform to DataFrame
             records = []
             for symbol in CRYPTO_SYMBOLS:
+                symbol = symbol.strip()
                 if symbol in data:
                     coin_data = data[symbol]
                     records.append({
-                        'symbol': symbol.upper() if len(symbol) <= 3 else symbol,
+                        'symbol': symbol.upper() if len(symbol) <= 3 else symbol.title(),
                         'price': coin_data.get('usd'),
                         'volume_24h': coin_data.get('usd_24h_vol'),
                         'market_cap': coin_data.get('usd_market_cap'),
                         'price_change_24h': coin_data.get('usd_24h_change'),
-                        'price_change_percentage_24h': coin_data.get('usd_24h_change'),
                         'last_updated': datetime.fromtimestamp(
                             coin_data.get('last_updated_at'),
                             tz=timezone.utc
                         ) if coin_data.get('last_updated_at') else datetime.now(timezone.utc)
                     })
+                else:
+                    logger.warning(f"No data returned for symbol: {symbol}")
             
+            if not records:
+                logger.error("[ERROR] No crypto price data retrieved!")
+                return None
+                
             df = pd.DataFrame(records)
-            logger.info(f"Successfully fetched {len(df)} crypto prices")
+            logger.info(f"[OK] Successfully fetched {len(df)} crypto prices")
+            
+            # Log the prices
+            for _, row in df.iterrows():
+                logger.info(f"  {row['symbol']}: ${row['price']:,.2f} ({row['price_change_24h']:+.2f}%)")
+            
             return df
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching crypto prices: {e}")
+            logger.error(f"[ERROR] Error fetching crypto prices: {e}")
             return None
         except Exception as e:
-            logger.error(f"Unexpected error in fetch_crypto_prices: {e}")
+            logger.error(f"[ERROR] Unexpected error in fetch_crypto_prices: {e}")
             return None
     
     def fetch_news_headlines(self) -> Optional[pd.DataFrame]:
@@ -155,10 +195,13 @@ class CryptoETLPipeline:
         """
         try:
             if not NEWSAPI_KEY:
-                logger.warning("NEWSAPI_KEY not set, skipping news fetch")
+                logger.warning("[WARNING] NEWSAPI_KEY not set, skipping news fetch")
                 return None
             
-            logger.info("Fetching crypto news headlines")
+            logger.info("Fetching crypto news headlines...")
+            
+            # Get news from last 24 hours
+            from_date = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
             
             # NewsAPI parameters
             params = {
@@ -166,44 +209,53 @@ class CryptoETLPipeline:
                 'apiKey': NEWSAPI_KEY,
                 'language': 'en',
                 'sortBy': 'publishedAt',
-                'pageSize': 50  # Get up to 50 recent articles
+                'from': from_date,
+                'pageSize': 50
             }
             
-            response = requests.get(NEWSAPI_ENDPOINT, params=params, timeout=10)
+            response = requests.get(NEWSAPI_ENDPOINT, params=params, timeout=15)
             response.raise_for_status()
             data = response.json()
             
             if data.get('status') != 'ok':
-                logger.error(f"NewsAPI error: {data.get('message')}")
+                logger.error(f"[ERROR] NewsAPI error: {data.get('message')}")
                 return None
             
             articles = data.get('articles', [])
+            
+            if not articles:
+                logger.warning("[WARNING] No news articles found")
+                return None
             
             # Transform to DataFrame
             records = []
             for article in articles:
                 # Skip articles with removed content
-                if article.get('title') == '[Removed]':
+                if article.get('title') == '[Removed]' or not article.get('title'):
                     continue
                     
                 records.append({
-                    'headline': article.get('title', ''),
-                    'description': article.get('description', ''),
+                    'headline': article.get('title', '').strip(),
+                    'description': article.get('description', '').strip() if article.get('description') else '',
                     'source': article.get('source', {}).get('name', 'Unknown'),
-                    'author': article.get('author'),
-                    'published_at': pd.to_datetime(article.get('publishedAt')),
+                    'author': article.get('author', ''),
+                    'published_at': pd.to_datetime(article.get('publishedAt'), utc=True),
                     'url': article.get('url', '')
                 })
             
+            if not records:
+                logger.warning("[WARNING] No valid news articles after filtering")
+                return None
+                
             df = pd.DataFrame(records)
-            logger.info(f"Successfully fetched {len(df)} news articles")
+            logger.info(f"[OK] Successfully fetched {len(df)} news articles")
             return df
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching news headlines: {e}")
+            logger.error(f"[ERROR] Error fetching news headlines: {e}")
             return None
         except Exception as e:
-            logger.error(f"Unexpected error in fetch_news_headlines: {e}")
+            logger.error(f"[ERROR] Unexpected error in fetch_news_headlines: {e}")
             return None
     
     def analyze_sentiment(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -217,7 +269,7 @@ class CryptoETLPipeline:
             DataFrame with added sentiment columns
         """
         try:
-            logger.info("Analyzing sentiment for headlines")
+            logger.info("Analyzing sentiment for headlines...")
             
             # Apply VADER to each headline
             sentiment_scores = df['headline'].apply(
@@ -238,11 +290,19 @@ class CryptoETLPipeline:
                 r'ethereum|eth', case=False, na=False
             )
             
-            logger.info(f"Sentiment analysis complete. Avg score: {df['sentiment_score'].mean():.3f}")
+            avg_score = df['sentiment_score'].mean()
+            logger.info(f"[OK] Sentiment analysis complete. Average score: {avg_score:.3f}")
+            
+            # Log sentiment distribution
+            positive = (df['sentiment_score'] > 0.05).sum()
+            negative = (df['sentiment_score'] < -0.05).sum()
+            neutral = len(df) - positive - negative
+            logger.info(f"  Positive: {positive}, Negative: {negative}, Neutral: {neutral}")
+            
             return df
             
         except Exception as e:
-            logger.error(f"Error in sentiment analysis: {e}")
+            logger.error(f"[ERROR] Error in sentiment analysis: {e}")
             return df
     
     def load_to_database(self, prices_df: Optional[pd.DataFrame], 
@@ -258,6 +318,8 @@ class CryptoETLPipeline:
             True if successful, False otherwise
         """
         try:
+            rows_inserted = 0
+            
             with self.engine.begin() as conn:
                 # Load crypto prices
                 if prices_df is not None and not prices_df.empty:
@@ -268,13 +330,15 @@ class CryptoETLPipeline:
                         index=False,
                         method='multi'
                     )
-                    logger.info(f"Loaded {len(prices_df)} price records to database")
+                    rows_inserted += len(prices_df)
+                    logger.info(f"[OK] Loaded {len(prices_df)} price records to database")
                 
                 # Load sentiment data
                 if sentiment_df is not None and not sentiment_df.empty:
-                    # Use ON CONFLICT to handle duplicates
+                    # Insert with conflict handling
+                    inserted = 0
                     for _, row in sentiment_df.iterrows():
-                        conn.execute(text("""
+                        result = conn.execute(text("""
                             INSERT INTO crypto_sentiment 
                             (headline, description, source, author, published_at, url,
                              sentiment_score, sentiment_positive, sentiment_negative, 
@@ -285,20 +349,30 @@ class CryptoETLPipeline:
                              :sentiment_neutral, :mentions_bitcoin, :mentions_ethereum)
                             ON CONFLICT (headline, published_at) DO NOTHING
                         """), row.to_dict())
+                        if result.rowcount > 0:
+                            inserted += 1
                     
-                    logger.info(f"Loaded {len(sentiment_df)} sentiment records to database")
+                    rows_inserted += inserted
+                    logger.info(f"[OK] Loaded {inserted} new sentiment records to database")
+                    if inserted < len(sentiment_df):
+                        logger.info(f"  ({len(sentiment_df) - inserted} duplicates skipped)")
                 
-                # Refresh materialized view
-                logger.info("Refreshing aggregated_metrics view")
-                conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY aggregated_metrics"))
-                
+                # Refresh materialized view if it exists
+                try:
+                    logger.info("Refreshing aggregated_metrics view...")
+                    conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY aggregated_metrics"))
+                    logger.info("[OK] Aggregated metrics updated")
+                except Exception as e:
+                    logger.warning(f"[WARNING] Could not refresh materialized view (may not exist yet): {e}")
+            
+            logger.info(f"[OK] Total rows inserted: {rows_inserted}")
             return True
             
         except SQLAlchemyError as e:
-            logger.error(f"Database error: {e}")
+            logger.error(f"[ERROR] Database error: {e}")
             return False
         except Exception as e:
-            logger.error(f"Unexpected error in load_to_database: {e}")
+            logger.error(f"[ERROR] Unexpected error in load_to_database: {e}")
             return False
     
     def run(self) -> bool:
@@ -308,35 +382,44 @@ class CryptoETLPipeline:
         Returns:
             True if successful, False otherwise
         """
-        logger.info("=" * 60)
-        logger.info("Starting ETL Pipeline Execution")
-        logger.info("=" * 60)
+        logger.info("=" * 70)
+        logger.info("STARTING ETL Pipeline Execution")
+        logger.info(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
+        logger.info("=" * 70)
         
         try:
             # Step 1: Extract - Fetch crypto prices
+            logger.info("\n[1/4] Extracting crypto prices...")
             prices_df = self.fetch_crypto_prices()
             
             # Step 2: Extract - Fetch news headlines
+            logger.info("\n[2/4] Extracting news headlines...")
             news_df = self.fetch_news_headlines()
             
             # Step 3: Transform - Analyze sentiment
+            logger.info("\n[3/4] Transforming data (sentiment analysis)...")
             sentiment_df = None
             if news_df is not None and not news_df.empty:
                 sentiment_df = self.analyze_sentiment(news_df)
+            else:
+                logger.warning("[WARNING] No news data to analyze")
             
             # Step 4: Load - Insert into database
+            logger.info("\n[4/4] Loading data to database...")
             success = self.load_to_database(prices_df, sentiment_df)
             
+            logger.info("\n" + "=" * 70)
             if success:
-                logger.info("ETL Pipeline completed successfully")
+                logger.info("[SUCCESS] ETL Pipeline completed successfully!")
             else:
-                logger.warning("ETL Pipeline completed with errors")
+                logger.warning("[WARNING] ETL Pipeline completed with errors")
+            logger.info("=" * 70)
             
-            logger.info("=" * 60)
             return success
             
         except Exception as e:
-            logger.error(f"Critical error in ETL pipeline: {e}")
+            logger.error(f"\n[ERROR] Critical error in ETL pipeline: {e}", exc_info=True)
+            logger.info("=" * 70)
             return False
 
 
@@ -357,7 +440,7 @@ def lambda_handler(event=None, context=None):
             }
         }
     except Exception as e:
-        logger.error(f"Lambda handler error: {e}")
+        logger.error(f"Lambda handler error: {e}", exc_info=True)
         return {
             'statusCode': 500,
             'body': {'error': str(e)}
@@ -366,5 +449,13 @@ def lambda_handler(event=None, context=None):
 
 if __name__ == "__main__":
     """Run pipeline locally for testing"""
-    pipeline = CryptoETLPipeline()
-    pipeline.run()
+    try:
+        pipeline = CryptoETLPipeline()
+        success = pipeline.run()
+        sys.exit(0 if success else 1)
+    except KeyboardInterrupt:
+        logger.info("\n[WARNING] Pipeline interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"\n[ERROR] Fatal error: {e}", exc_info=True)
+        sys.exit(1)
