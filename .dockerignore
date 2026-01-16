@@ -1,0 +1,17 @@
+# Don't include these in Docker image
+.env
+.env.example
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.log
+*.md
+.vscode
+.idea
+*.DS_Store
+deploy.sh
+README.md
