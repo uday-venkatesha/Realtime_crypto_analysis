@@ -19,67 +19,25 @@ NewsAPI ────────┘                ↑
 - **Database**: PostgreSQL (Supabase)
 - **Compute**: AWS Lambda (Docker Container)
 - **Scheduler**: Amazon EventBridge
-- **Dashboard**: Streamlit
+- **Dashboard**: Streamlit (Phase 4)
 
 ## 📁 Project Structure
 
 ```
 crypto-sentiment-pipeline/
-├── etl_pipeline.py          # Main ETL logic
-├── lambda_function.py       # AWS Lambda entry point
-├── requirements.txt         # Python dependencies
-├── Dockerfile              # Container configuration
-├── .dockerignore           # Docker ignore rules
-├── deploy.sh               # Deployment automation
-├── deploy_update_env.sh    # Update environment variables
-├── .env                    # Local environment variables (gitignored)
-└── README.md               # This file
+├── README.md                    # This file
+├── .env.example                 # Environment variables template
+├── .dockerignore               # Docker ignore rules
+├── Dockerfile                  # Container configuration
+├── requirements.txt            # Python dependencies
+├── etl_pipeline.py            # Main ETL logic
+├── lambda_function.py         # AWS Lambda entry point
+├── test_db.py                 # Database connection test
+├── deploy.bat                 # Windows deployment script
+└── deploy.sh                  # Linux/Mac deployment script
 ```
 
-## 🚀 Local Development Setup
-
-### 1. Clone and Setup
-
-```bash
-# Create project directory
-mkdir crypto-sentiment-pipeline
-cd crypto-sentiment-pipeline
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### 2. Configure Environment Variables
-
-Create `.env` file:
-
-```bash
-# Database (Supabase)
-DB_HOST=aws-0-us-east-1.pooler.supabase.com
-DB_PORT=6543
-DB_NAME=postgres
-DB_USER=postgres.your_project_ref
-DB_PASSWORD=your_password
-
-# API Keys
-NEWSAPI_KEY=your_newsapi_key
-
-# Configuration
-CRYPTO_SYMBOLS=bitcoin,ethereum
-NEWS_SEARCH_QUERY=cryptocurrency OR bitcoin OR ethereum
-```
-
-### 3. Test Locally
-
-```bash
-python etl_pipeline.py
-```
-
-## 🐳 AWS Lambda Deployment
+## 🚀 Quick Start
 
 ### Prerequisites
 
@@ -88,7 +46,102 @@ python etl_pipeline.py
 3. **Supabase** database set up
 4. **NewsAPI** key obtained
 
-### Step 1: Configure AWS CLI
+### 1. Clone and Setup
+
+```bash
+# Clone repository
+git clone <your-repo-url>
+cd crypto-sentiment-pipeline
+
+# Create virtual environment (optional, for local testing)
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies (optional, for local testing)
+pip install -r requirements.txt
+```
+
+### 2. Configure Environment
+
+```bash
+# Copy template and edit
+cp .env.example .env
+
+# Edit .env with your credentials
+# Required values:
+# - DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD (from Supabase)
+# - NEWSAPI_KEY (from newsapi.org)
+```
+
+### 3. Setup Database Schema
+
+Run this SQL in your Supabase SQL Editor:
+
+```sql
+-- Create crypto_prices table
+CREATE TABLE IF NOT EXISTS crypto_prices (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(10) NOT NULL,
+    price DECIMAL(20, 8) NOT NULL,
+    volume_24h DECIMAL(30, 2),
+    market_cap DECIMAL(30, 2),
+    price_change_24h DECIMAL(10, 4),
+    last_updated TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Create crypto_sentiment table
+CREATE TABLE IF NOT EXISTS crypto_sentiment (
+    id SERIAL PRIMARY KEY,
+    headline TEXT NOT NULL,
+    description TEXT,
+    source VARCHAR(100),
+    author VARCHAR(200),
+    published_at TIMESTAMPTZ NOT NULL,
+    url TEXT,
+    sentiment_score DECIMAL(5, 4),
+    sentiment_positive DECIMAL(5, 4),
+    sentiment_negative DECIMAL(5, 4),
+    sentiment_neutral DECIMAL(5, 4),
+    mentions_bitcoin BOOLEAN DEFAULT FALSE,
+    mentions_ethereum BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(headline, published_at)
+);
+
+-- Create indexes
+CREATE INDEX IF NOT EXISTS idx_crypto_prices_symbol ON crypto_prices(symbol);
+CREATE INDEX IF NOT EXISTS idx_crypto_prices_last_updated ON crypto_prices(last_updated);
+CREATE INDEX IF NOT EXISTS idx_crypto_sentiment_published_at ON crypto_sentiment(published_at);
+CREATE INDEX IF NOT EXISTS idx_crypto_sentiment_sentiment_score ON crypto_sentiment(sentiment_score);
+
+-- Create aggregated metrics view
+CREATE MATERIALIZED VIEW IF NOT EXISTS aggregated_metrics AS
+SELECT 
+    DATE_TRUNC('hour', cp.last_updated) as time_bucket,
+    cp.symbol,
+    AVG(cp.price) as avg_price,
+    AVG(cs.sentiment_score) as avg_sentiment,
+    COUNT(DISTINCT cs.id) as news_count
+FROM crypto_prices cp
+LEFT JOIN crypto_sentiment cs 
+    ON DATE_TRUNC('hour', cs.published_at) = DATE_TRUNC('hour', cp.last_updated)
+GROUP BY DATE_TRUNC('hour', cp.last_updated), cp.symbol
+ORDER BY time_bucket DESC;
+
+-- Create index on materialized view
+CREATE UNIQUE INDEX IF NOT EXISTS idx_aggregated_metrics_unique 
+ON aggregated_metrics (time_bucket, symbol);
+```
+
+### 4. Test Database Connection (Optional)
+
+```bash
+# Test before deploying
+python test_db.py
+```
+
+### 5. Configure AWS CLI
 
 ```bash
 aws configure
@@ -98,93 +151,50 @@ aws configure
 # Enter output format (json)
 ```
 
-### Step 2: Make Deployment Script Executable
+### 6. Deploy to AWS
 
+#### Windows:
+```batch
+# Full deployment
+deploy.bat
+
+# Or use specific commands
+deploy.bat deploy        # Full deployment
+deploy.bat update-code   # Update code only
+deploy.bat update-env    # Update environment variables
+deploy.bat schedule      # Setup EventBridge schedule
+deploy.bat clean         # Remove all resources
+deploy.bat help          # Show help
+```
+
+#### Linux/Mac:
 ```bash
+# Make script executable
 chmod +x deploy.sh
-chmod +x deploy_update_env.sh
-```
 
-### Step 3: Update Configuration in deploy.sh
-
-Open `deploy.sh` and update:
-
-```bash
-AWS_REGION="us-east-1"  # Your preferred region
-AWS_ACCOUNT_ID="YOUR_AWS_ACCOUNT_ID"  # From AWS Console
-```
-
-### Step 4: Deploy to AWS
-
-```bash
+# Full deployment
 ./deploy.sh
+
+# Or use specific commands
+./deploy.sh deploy        # Full deployment
+./deploy.sh update-code   # Update code only
+./deploy.sh update-env    # Update environment variables
+./deploy.sh schedule      # Setup EventBridge schedule
+./deploy.sh clean         # Remove all resources
+./deploy.sh help          # Show help
 ```
 
-This script will:
-1. ✓ Verify AWS credentials
-2. ✓ Create ECR repository
-3. ✓ Build Docker image
-4. ✓ Push to ECR
-5. ✓ Create IAM role
-6. ✓ Create/Update Lambda function
-
-### Step 5: Update Environment Variables (After Deployment)
+### 7. Setup Automatic Scheduling
 
 ```bash
-./deploy_update_env.sh
+# Windows
+deploy.bat schedule
+
+# Linux/Mac
+./deploy.sh schedule
 ```
 
-## ⏰ EventBridge Scheduling Setup
-
-### Create EventBridge Rule (30-minute intervals)
-
-#### Option 1: AWS Console
-
-1. Go to **Amazon EventBridge** → **Rules**
-2. Click **Create rule**
-3. Configure:
-   - Name: `crypto-sentiment-schedule`
-   - Event bus: `default`
-   - Rule type: `Schedule`
-4. Schedule pattern:
-   - Rate expression: `rate(30 minutes)`
-5. Select target:
-   - Target type: `AWS service`
-   - Target: `Lambda function`
-   - Function: `crypto-sentiment-pipeline`
-6. Click **Create**
-
-#### Option 2: AWS CLI
-
-```bash
-# Create EventBridge rule
-aws events put-rule \
-    --name crypto-sentiment-schedule \
-    --schedule-expression "rate(30 minutes)" \
-    --region us-east-1
-
-# Get Lambda function ARN
-LAMBDA_ARN=$(aws lambda get-function \
-    --function-name crypto-sentiment-pipeline \
-    --query 'Configuration.FunctionArn' \
-    --output text \
-    --region us-east-1)
-
-# Add Lambda as target
-aws events put-targets \
-    --rule crypto-sentiment-schedule \
-    --targets "Id"="1","Arn"="$LAMBDA_ARN" \
-    --region us-east-1
-
-# Grant EventBridge permission to invoke Lambda
-aws lambda add-permission \
-    --function-name crypto-sentiment-pipeline \
-    --statement-id EventBridgeInvoke \
-    --action lambda:InvokeFunction \
-    --principal events.amazonaws.com \
-    --source-arn arn:aws:events:us-east-1:YOUR_ACCOUNT_ID:rule/crypto-sentiment-schedule \
-    --region us-east-1
-```
+This creates an EventBridge rule that runs the pipeline every 30 minutes.
 
 ## 🧪 Testing
 
@@ -198,7 +208,8 @@ aws lambda invoke \
     response.json
 
 # View response
-cat response.json
+cat response.json  # Linux/Mac
+type response.json # Windows
 ```
 
 ### Check CloudWatch Logs
@@ -221,16 +232,15 @@ SELECT * FROM aggregated_metrics ORDER BY time_bucket DESC LIMIT 10;
 
 ### CloudWatch Metrics
 
-Monitor in AWS Console:
+Monitor in AWS Console → CloudWatch:
 - **Invocations**: Number of times Lambda runs
 - **Duration**: Execution time
 - **Errors**: Failed executions
 - **Throttles**: Rate limiting
 
-### Set Up Alarms
+### Set Up Alarms (Optional)
 
 ```bash
-# Create CloudWatch alarm for errors
 aws cloudwatch put-metric-alarm \
     --alarm-name crypto-pipeline-errors \
     --alarm-description "Alert on Lambda errors" \
@@ -253,7 +263,7 @@ aws cloudwatch put-metric-alarm \
 - **CloudWatch Logs**: 5GB ingestion free
 
 ### Monthly Cost (After Free Tier)
-- **Lambda**: ~$0.20 (48 runs/day × 30 days × ~10 sec)
+- **Lambda**: ~$0.20 (48 runs/day × 30 days)
 - **Supabase**: $0 (Free tier: 500MB database)
 - **NewsAPI**: $0 (Free tier: 100 requests/day)
 - **Total**: ~$0.20/month ✅
@@ -262,7 +272,6 @@ aws cloudwatch put-metric-alarm \
 
 ### Lambda Timeout
 ```bash
-# Increase timeout to 15 minutes
 aws lambda update-function-configuration \
     --function-name crypto-sentiment-pipeline \
     --timeout 900 \
@@ -271,7 +280,6 @@ aws lambda update-function-configuration \
 
 ### Memory Issues
 ```bash
-# Increase memory to 1024 MB
 aws lambda update-function-configuration \
     --function-name crypto-sentiment-pipeline \
     --memory-size 1024 \
@@ -279,9 +287,55 @@ aws lambda update-function-configuration \
 ```
 
 ### Connection Issues
-- Verify Supabase credentials in Lambda environment variables
+- Verify Supabase credentials in `.env`
 - Check security groups allow outbound connections
-- Test database connection locally first
+- Test database connection with `test_db.py`
+
+### Deployment Issues
+- Ensure Docker is running
+- Check AWS credentials: `aws sts get-caller-identity`
+- Verify IAM permissions for Lambda, ECR, EventBridge
+
+## 🔄 Updating the Pipeline
+
+### Update Code
+```bash
+# After modifying etl_pipeline.py or lambda_function.py
+deploy.bat update-code  # Windows
+./deploy.sh update-code # Linux/Mac
+```
+
+### Update Environment Variables
+```bash
+# After modifying .env
+deploy.bat update-env  # Windows
+./deploy.sh update-env # Linux/Mac
+```
+
+### Update Dependencies
+```bash
+# After modifying requirements.txt
+deploy.bat deploy      # Full redeployment needed
+./deploy.sh deploy
+```
+
+## 🗑️ Cleanup
+
+Remove all AWS resources:
+
+```bash
+# Windows
+deploy.bat clean
+
+# Linux/Mac
+./deploy.sh clean
+```
+
+This will delete:
+- Lambda function
+- ECR repository images
+- IAM role
+- EventBridge rule
 
 ## 🎯 Next Steps
 
@@ -293,10 +347,15 @@ aws lambda update-function-configuration \
 ## 📚 Resources
 
 - [AWS Lambda Documentation](https://docs.aws.amazon.com/lambda/)
-- [Supabase Docs](https://supabase.com/docs)
+- [Supabase Documentation](https://supabase.com/docs)
 - [NewsAPI Documentation](https://newsapi.org/docs)
 - [CoinGecko API](https://www.coingecko.com/en/api)
+- [Docker Documentation](https://docs.docker.com/)
 
 ## 📝 License
 
 MIT License - Feel free to use this for learning and portfolio projects!
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.

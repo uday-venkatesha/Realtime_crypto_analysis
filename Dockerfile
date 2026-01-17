@@ -1,18 +1,21 @@
-# Use AWS Lambda Python 3.11 base image
+# Use the official AWS Lambda Python 3.11 base image
+# This ensures compatibility with Lambda's runtime environment
 FROM public.ecr.aws/lambda/python:3.11
 
-# Optimize pip for faster installs
-ENV PIP_DEFAULT_TIMEOUT=100
-ENV PIP_NO_CACHE_DIR=1
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+# Set environment variables for pip optimization
+ENV PIP_DEFAULT_TIMEOUT=100 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1
 
-# Set working directory
+# Set working directory to Lambda task root
 WORKDIR ${LAMBDA_TASK_ROOT}
 
-# Copy requirements first (for better caching)
+# Copy requirements file first (for better layer caching)
 COPY requirements.txt .
 
-# Install Python dependencies with optimizations
+# Install Python dependencies
+# Using --no-cache-dir to reduce image size
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
@@ -20,5 +23,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY etl_pipeline.py .
 COPY lambda_function.py .
 
-# Set the CMD to your Lambda handler
+# Verify critical files exist
+RUN ls -la ${LAMBDA_TASK_ROOT} && \
+    python -c "import lambda_function; print('Lambda function module OK')"
+
+# Set the Lambda handler
+# Format: {filename}.{function_name}
 CMD ["lambda_function.lambda_handler"]

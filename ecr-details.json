@@ -1,0 +1,33 @@
+{
+    "imageDetails": [
+        {
+            "registryId": "587234333121",
+            "repositoryName": "crypto-sentiment-etl",
+            "imageDigest": "sha256:6d83c61d9239ad64869fe62a61204dec3368674f19a1e74a68f8f48c14bc2c68",
+            "imageSizeInBytes": 1609,
+            "imagePushedAt": "2026-01-16T16:29:04.683000-06:00",
+            "imageManifestMediaType": "application/vnd.oci.image.manifest.v1+json",
+            "artifactMediaType": "application/vnd.oci.image.config.v1+json"
+        },
+        {
+            "registryId": "587234333121",
+            "repositoryName": "crypto-sentiment-etl",
+            "imageDigest": "sha256:f720104e0142af18d9688000fd72e333ce7fcfa0d605afc2cf95db6d6ba19fd3",
+            "imageSizeInBytes": 302170756,
+            "imagePushedAt": "2026-01-16T16:29:04.672000-06:00",
+            "imageManifestMediaType": "application/vnd.oci.image.manifest.v1+json",
+            "artifactMediaType": "application/vnd.oci.image.config.v1+json"
+        },
+        {
+            "registryId": "587234333121",
+            "repositoryName": "crypto-sentiment-etl",
+            "imageDigest": "sha256:27572273788425742672c0bdb7b7e544dfb42f3a83b74d833a7d081a9f0ac5bf",
+            "imageTags": [
+                "latest"
+            ],
+            "imageSizeInBytes": 302170756,
+            "imagePushedAt": "2026-01-16T16:29:05.098000-06:00",
+            "imageManifestMediaType": "application/vnd.oci.image.index.v1+json"
+        }
+    ]
+}

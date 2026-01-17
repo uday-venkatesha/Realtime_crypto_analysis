@@ -1,1 +1,1 @@
-{"statusCode": 200, "body": "{\"message\": \"ETL pipeline executed successfully\", \"timestamp\": \"2025-12-27T05:26:41.319224+00:00\", \"function_name\": \"crypto-sentiment-pipeline\", \"request_id\": \"aea94cf4-9676-48d0-af44-ed2b76ebf6c9\"}"}
+{"statusCode": 200, "body": "{\"message\": \"ETL pipeline executed successfully\", \"timestamp\": \"2026-01-16T23:29:12.004140+00:00\", \"function_name\": \"crypto-sentiment-pipeline\", \"request_id\": \"7fdb113a-01dc-486e-b662-ac4c9c8d1301\"}"}
